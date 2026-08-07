@@ -138,7 +138,8 @@ it in the repository settings:
 | Secret / variable         | Value                                                        |
 | ------------------------- | ------------------------------------------------------------ |
 | `GEMINI_API_KEY` (secret) | free key from <https://aistudio.google.com/apikey>           |
-| `LLM_MODEL` (variable)    | model id, default `gemini-2.5-flash`                         |
+| `LLM_MODEL` (variable)    | preferred model id, defaults to `gemini-2.5-flash` with
+  fallbacks to newer flash models when unavailable                |
 
 An issue run costs only a few requests, well below the free-tier
 limits. If `GEMINI_API_KEY` is missing, the issue is labelled

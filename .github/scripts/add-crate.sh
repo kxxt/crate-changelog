@@ -16,8 +16,9 @@
 #   CRATE               crate name parsed from the issue body
 #   SUGGESTED_URL       optional suggested changelog URL (may be empty)
 #   GEMINI_API_KEY      free Google AI Studio API key
-#   LLM_MODEL           Gemini model id (default: gemini-2.5-flash)
-#   MAX_ATTEMPTS        LLM search attempts before giving up (default: 3)
+#   LLM_MODEL           preferred Gemini model id (optional; defaults
+#                       are tried in order when unset or unavailable)
+#   MAX_ATTEMPTS        search attempts before giving up (default: 3)
 #
 # Exit code is 0 even when the agent gives up; the issue labels carry
 # the outcome.
@@ -30,9 +31,8 @@ set -euo pipefail
 : "${CRATE:?CRATE is required}"
 : "${GEMINI_API_KEY:?GEMINI_API_KEY is required}"
 
-MODEL="${LLM_MODEL:-gemini-2.5-flash}"
-MAX_ATTEMPTS="${MAX_ATTEMPTS:-20}"
-API_BASE="https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent"
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
+API_BASE="https://generativelanguage.googleapis.com/v1beta/models"
 
 comment() { gh issue comment "$ISSUE" --body "$1" >/dev/null; }
 label() { gh issue edit "$ISSUE" --add-label "$1" >/dev/null || true; }
@@ -62,10 +62,82 @@ url_reachable() {
     [[ "$code" =~ ^(200|201|204|301|302|307|308|405)$ ]]
 }
 
+# Models to try, in order: the explicitly configured model first, then
+# known free-tier models that support the google_search tool.
+llm_candidates() {
+    if [[ -n "${LLM_MODEL:-}" ]]; then
+        printf '%s\n' "$LLM_MODEL"
+    fi
+    printf '%s\n' "gemini-2.5-flash" "gemini-3.6-flash" "gemini-2.0-flash"
+}
+
+# Build the JSON request body from the prompt. No responseMimeType here:
+# combining JSON output mode with google_search grounding is rejected by
+# some models, so the model is asked for JSON in-band instead.
+llm_payload() {
+    python3 -c '
+import json, sys
+print(json.dumps({
+    "contents": [{"parts": [{"text": sys.argv[1]}]}],
+    "tools": [{"google_search": {}}],
+    "generationConfig": {"temperature": 0.2},
+}))' "$1"
+}
+
+# Extract the model's error message, if the response is an error envelope.
+llm_error() {
+    python3 - "$1" <<'PYEOF'
+import json, sys
+try:
+    err = json.loads(sys.argv[1]).get("error")
+    print(err.get("message", "") if isinstance(err, dict) else "")
+except Exception:
+    print("")
+PYEOF
+}
+
+# Extract a changelog URL from a model response. Handles the plain JSON
+# envelope, markdown-fenced JSON, extra commentary, and a regex
+# fallback. Prints the URL, or nothing.
+llm_url() {
+    python3 - "$1" <<'PYEOF'
+import json, re, sys
+text = sys.argv[1].strip()
+try:
+    data = json.loads(text)
+    if isinstance(data, dict) and "candidates" in data:
+        parts = data["candidates"][0].get("content", {}).get("parts", [])
+        inner = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        if inner:
+            text = inner
+except Exception:
+    pass
+# Strip markdown code fences if the model wrapped its JSON anyway.
+text = re.sub(r"```(?:json)?\s*", "", text)
+text = re.sub(r"\s*```", "", text).strip()
+url = ""
+m = re.search(r"\{.*\}", text, re.S)
+if m:
+    try:
+        u = json.loads(m.group(0)).get("changelog_url")
+        if isinstance(u, str):
+            url = u
+    except Exception:
+        pass
+if not url:
+    m = re.search(r'"changelog_url"\s*:\s*"([^"]+)"', text)
+    if m:
+        url = m.group(1)
+print(url)
+PYEOF
+}
+
 # Ask the model (with Google Search grounding) for a changelog URL.
-# Prints the URL, or nothing if the model found none / the API failed.
+# Prints the URL, or nothing if the model found none / every model
+# failed. Falls back across llm_candidates() when a model is
+# unavailable, and logs API errors so failures are visible.
 llm_find_url() {
-    local crate="$1" feedback="${2:-}" prompt payload resp url
+    local crate="$1" feedback="${2:-}" prompt model resp error_msg url
     prompt="$(cat <<EOF
 You maintain crate-changelog, a service that redirects
 https://crate-changelog.kxxt.dev/<crate> to that crate's changelog page.
@@ -86,32 +158,38 @@ Requirements:
   content. Do not invent URLs.
 $(if [[ -n "$feedback" ]]; then printf '%s' "- The previous candidate failed validation: $feedback. Find a different, correct URL."; fi)
 
-Respond with JSON only:
+Respond with a single JSON object and nothing else. No markdown, no
+code fences, no commentary:
 {"changelog_url": "https://..." or null, "reason": "short justification"}
 EOF
 )"
 
-    payload="$(python3 -c '
-import json, sys
-print(json.dumps({
-    "contents": [{"parts": [{"text": sys.argv[1]}]}],
-    "tools": [{"google_search": {}}],
-    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
-}))' "$prompt")"
-    resp="$(curl -sS --max-time 60 -X POST "$API_BASE?key=$GEMINI_API_KEY" \
-        -H "Content-Type: application/json" -d "$payload" 2>/dev/null || true)"
-    url="$(printf '%s' "$resp" | python3 -c '
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    text = data["candidates"][0]["content"]["parts"][0]["text"]
-    parsed = json.loads(text)
-    u = parsed.get("changelog_url")
-    print(u if isinstance(u, str) else "")
-except Exception:
-    print("")
-')"
-    printf '%s' "$url"
+    for model in $(llm_candidates); do
+        resp="$(curl -sS --max-time 60 -X POST \
+            "${API_BASE}/${model}:generateContent?key=${GEMINI_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$(llm_payload "$prompt")" 2>/dev/null || true)"
+
+        error_msg="$(llm_error "$resp")"
+        if [[ -n "$error_msg" ]]; then
+            info "api error with ${model}: ${error_msg}"
+            # Model availability issues should fall through to the next
+            # candidate; anything else will not be fixed by retrying.
+            case "$error_msg" in
+                *"not found"* | *NOT_FOUND* | *"permission"* | *PERMISSION_DENIED* | *"deprecated"* | *DEPRECATED* | *"does not exist"* | *"access"*) continue ;;
+                *) return 0 ;;
+            esac
+        fi
+
+        url="$(llm_url "$resp")"
+        if [[ -n "$url" ]]; then
+            printf '%s' "$url"
+            return 0
+        fi
+        info "model ${model} returned no usable URL"
+        return 0
+    done
+    return 0
 }
 
 # Resolve the changelog URL: suggested one first, then the LLM loop.
