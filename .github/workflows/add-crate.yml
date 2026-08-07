@@ -135,8 +135,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       GITHUB_TOKEN: ${{ github.token }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      LLM_MODEL: ${{ vars.LLM_MODEL || 'gemini-2.5-flash' }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
       CRATE: ${{ needs.validate.outputs.crate }}
       SUGGESTED_URL: ${{ needs.validate.outputs.suggested_url }}
       ISSUE: ${{ github.event.issue.number }}
@@ -146,12 +146,12 @@ jobs:
 
       - name: Run the changelog agent
         run: |
-          if [[ -z "${GEMINI_API_KEY}" ]]; then
+          if [[ -z "${OPENROUTER_API_KEY}" ]]; then
             # The secret is not configured; label the issue for humans
             # instead of failing the workflow.
             gh issue edit "$ISSUE" --add-label needs-human-help >/dev/null
             gh issue comment "$ISSUE" \
-              --body "The changelog agent is not configured: the \`GEMINI_API_KEY\` secret is missing. A human needs to handle this one." >/dev/null
+              --body "The changelog agent is not configured: the \`OPENROUTER_API_KEY\` secret is missing. A human needs to handle this one." >/dev/null
             exit 0
           fi
           .github/scripts/add-crate.sh

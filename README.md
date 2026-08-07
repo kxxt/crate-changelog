@@ -120,34 +120,41 @@ automatically by [`.github/workflows/add-crate.yml`](.github/workflows/add-crate
    the issue (`crate-not-found`).
 2. **Search** — if the optional `suggested changelog url` is valid and
    reachable it is used directly. Otherwise
-   [`.github/scripts/add-crate.sh`](.github/scripts/add-crate.sh) asks a
-   free-tier LLM *with web search* to find the best changelog URL for
-   the crate. Candidates are validated with HTTP HEAD requests and the
-   search is retried with feedback (up to `MAX_ATTEMPTS` times).
+   [`.github/scripts/add-crate.sh`](.github/scripts/add-crate.sh) runs a
+   free search harness and asks a free LLM to pick the best changelog
+   URL for the crate. Candidates are validated with HTTP HEAD requests
+   and the search is retried with feedback (up to `MAX_ATTEMPTS`
+   times).
 3. **PR or human help** — a found URL becomes a pull request that adds
    the `changelog` data file and closes the issue (`Closes #N`); if
    nothing usable is found the issue is labelled `needs-human-help`.
 
-The LLM is the
-[Google Gemini API](https://ai.google.dev/gemini-api/docs/grounding)
-with the `google_search` tool — the only major free tier that includes
-native web search (alternatives surveyed: Groq/Cerebras are free but
-have no search tool; OpenAI/Anthropic have no free API tier). Configure
-it in the repository settings:
+The whole pipeline is free:
 
-| Secret / variable              | Value                                                       |
-| ------------------------------ | ----------------------------------------------------------- |
-| `GEMINI_API_KEY` (secret)      | free key from <https://aistudio.google.com/apikey>          |
-| `LLM_MODEL` (variable)         | preferred model id, defaults to `gemini-2.5-flash`          |
-| `MAX_ATTEMPTS` (variable)      | search attempts before giving up (default: 20)              |
-| `RATE_LIMIT_BACKOFF_SECS` (variable) | sleep after every model is rate-limited (default: 10) |
+- **web search** — [DuckDuckGo](https://duckduckgo.com) HTML endpoint
+  (no API key), queried for `<crate> changelog` and `<crate> rust crate`;
+- **crate metadata** — the [crates.io JSON API](https://crates.io/api)
+  (repository, homepage, documentation links);
+- **reasoning** — [OpenRouter](https://openrouter.ai) `:free` models
+  (`$0` tokens; the agent picks from the evidence, no paid search, no
+  tool calling).
 
-When a model is rate-limited (`429`) or unavailable, the agent
+Configure the API key in the repository settings:
+
+| Secret / variable                   | Value                                            |
+| ----------------------------------- | ------------------------------------------------ |
+| `OPENROUTER_API_KEY` (secret)       | key from <https://openrouter.ai/keys>            |
+| `OPENROUTER_MODEL` (variable)       | preferred model, default `nvidia/nemotron-3-ultra-550b-a55b:free` |
+| `MAX_ATTEMPTS` (variable)           | search attempts before giving up (default: 20)   |
+| `RATE_LIMIT_BACKOFF_SECS` (variable)| sleep after every model is rate-limited (default: 10) |
+
+When a free model is rate-limited (`429`) or unavailable, the agent
 automatically falls back to the next model in its list
-(`gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-3.6-flash`,
-`gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-2.0-flash`,
-`gemini-2.0-flash-lite`), so a single throttled model does not stall
-the workflow. If `GEMINI_API_KEY` is missing, the issue is labelled
+(`nemotron-3-ultra-550b-a55b:free`, `gpt-oss-20b:free`,
+`gemma-4-31b-it:free`, `nemotron-3-super-120b-a12b:free`,
+`gemma-4-26b-a4b-it:free`, `nemotron-nano-12b-v2-vl:free`,
+`laguna-s-2.1:free`), so a single throttled model does not stall the
+workflow. If `OPENROUTER_API_KEY` is missing, the issue is labelled
 `needs-human-help` instead of failing.
 
 ## License
