@@ -109,6 +109,41 @@ Or use the helper subcommand:
 $ cargo run -- add <crate-name> <changelog-url>
 ```
 
+### Automated crate intake (agent)
+
+Issues filed with the **Changelog redirect request**
+([template](.github/ISSUE_TEMPLATE/changelog_redirect.yml)) are handled
+automatically by [`.github/workflows/add-crate.yml`](.github/workflows/add-crate.yml):
+
+1. **Validate** — the required `crate` field is checked against
+   crates.io. If the crate does not exist, the bot comments and closes
+   the issue (`crate-not-found`).
+2. **Search** — if the optional `suggested changelog url` is valid and
+   reachable it is used directly. Otherwise
+   [`.github/scripts/add-crate.sh`](.github/scripts/add-crate.sh) asks a
+   free-tier LLM *with web search* to find the best changelog URL for
+   the crate. Candidates are validated with HTTP HEAD requests and the
+   search is retried with feedback up to three times.
+3. **PR or human help** — a found URL becomes a pull request that adds
+   the `changelog` data file and closes the issue (`Closes #N`); if
+   nothing usable is found the issue is labelled `needs-human-help`.
+
+The LLM is the
+[Google Gemini API](https://ai.google.dev/gemini-api/docs/grounding)
+with the `google_search` tool — the only major free tier that includes
+native web search (alternatives surveyed: Groq/Cerebras are free but
+have no search tool; OpenAI/Anthropic have no free API tier). Configure
+it in the repository settings:
+
+| Secret / variable         | Value                                                        |
+| ------------------------- | ------------------------------------------------------------ |
+| `GEMINI_API_KEY` (secret) | free key from <https://aistudio.google.com/apikey>           |
+| `LLM_MODEL` (variable)    | model id, default `gemini-2.5-flash`                         |
+
+An issue run costs only a few requests, well below the free-tier
+limits. If `GEMINI_API_KEY` is missing, the issue is labelled
+`needs-human-help` instead of failing.
+
 ## License
 
 MIT OR Apache-2.0.

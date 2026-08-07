@@ -1,0 +1,21 @@
+name: Changelog redirect request
+description: Request a changelog redirect for a crate
+title: "changelog redirect: [crate]"
+labels: ["changelog-request"]
+body:
+  - type: input
+    id: crate
+    attributes:
+      label: Crate
+      description: The crates.io name of the crate (e.g. `tracexec`)
+      placeholder: tracexec
+    validations:
+      required: true
+  - type: input
+    id: suggested_changelog_url
+    attributes:
+      label: Suggested changelog URL (optional)
+      description: If you already know where the crate's changelog lives, put it here to skip the search
+      placeholder: https://github.com/OWNER/REPO/blob/main/CHANGELOG.md
+    validations:
+      required: false

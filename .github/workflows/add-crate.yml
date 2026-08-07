@@ -1,0 +1,131 @@
+name: Changelog redirect agent
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changelog-agent-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  # 1. Parse the issue, check whether the crate exists on crates.io,
+  #    and close the issue when it does not.
+  validate:
+    name: Validate the crate
+    if: contains(github.event.issue.labels.*.name, 'changelog-request')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    outputs:
+      crate: ${{ steps.parse.outputs.crate }}
+      suggested_url: ${{ steps.parse.outputs.suggested_url }}
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: Parse issue fields
+        id: parse
+        env:
+          BODY: ${{ github.event.issue.body }}
+        run: |
+          # Extract the value under a "### <Field>" heading of a GitHub
+          # form-issue body: the first non-empty, non-heading line.
+          parse_field() {
+            awk -v field="$2" '
+              $0 == "### " field { grab = 1; next }
+              grab && /^[[:space:]]*$/ { next }
+              grab && /^#/ { exit }
+              grab { sub(/^[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); print; exit }
+            ' <<<"$1"
+          }
+          body="$(printf '%s' "$BODY" | tr -d '\r')"
+          crate="$(parse_field "$body" "Crate")"
+          suggested="$(parse_field "$body" "Suggested changelog URL (optional)")"
+          # GitHub forms fill unanswered fields with "_No response_".
+          [[ "$crate" == "_No response_" ]] && crate=""
+          [[ "$suggested" == "_No response_" ]] && suggested=""
+          echo "crate=${crate}" >>"$GITHUB_OUTPUT"
+          echo "suggested_url=${suggested}" >>"$GITHUB_OUTPUT"
+
+      - name: Check the crate exists on crates.io
+        id: check
+        env:
+          CRATE: ${{ steps.parse.outputs.crate }}
+        run: |
+          if [[ -z "$CRATE" ]]; then
+            echo "exists=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=000
+          for _ in 1 2 3; do
+            code="$(curl -sS --max-time 20 -A "crate-changelog-bot (crate-changelog CI)" \
+              -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/$CRATE" || true)"
+            [[ "$code" != "429" ]] && break
+            sleep 2
+          done
+          if [[ "$code" == "200" ]]; then
+            echo "exists=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment and close if the crate does not exist
+        if: steps.check.outputs.exists == 'false'
+        env:
+          CRATE: ${{ steps.parse.outputs.crate }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          if [[ -z "$CRATE" ]]; then
+            gh issue comment "$ISSUE" \
+              --body "I could not find a crate name in this issue. Please open a new issue using the **Changelog redirect request** template." >/dev/null
+            gh issue edit "$ISSUE" --add-label needs-human-help >/dev/null
+          else
+            gh issue comment "$ISSUE" \
+              --body "The crate **\`$CRATE\`** does not exist on [crates.io](https://crates.io/crates/$CRATE), so there is nothing to redirect. Closing." >/dev/null
+            gh issue edit "$ISSUE" --add-label crate-not-found >/dev/null
+            gh issue close "$ISSUE" --reason "not planned" >/dev/null
+          fi
+
+      - name: Hand the issue to the agent
+        if: steps.check.outputs.exists == 'true'
+        env:
+          ISSUE: ${{ github.event.issue.number }}
+        run: gh issue edit "$ISSUE" --add-label agent-ready >/dev/null
+
+  # 2. Agentic search for the best changelog URL (free-tier LLM with
+  #    web search), then a PR that closes the issue, or a
+  #    needs-human-help label when nothing usable is found.
+  agent:
+    name: Find the changelog URL and open a PR
+    needs: validate
+    if: needs.validate.outputs.exists == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      LLM_MODEL: ${{ vars.LLM_MODEL || 'gemini-2.5-flash' }}
+      CRATE: ${{ needs.validate.outputs.crate }}
+      SUGGESTED_URL: ${{ needs.validate.outputs.suggested_url }}
+      ISSUE: ${{ github.event.issue.number }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Label for humans if the API key is missing
+        if: ${{ secrets.GEMINI_API_KEY == '' }}
+        env:
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          gh issue edit "$ISSUE" --add-label needs-human-help >/dev/null
+          gh issue comment "$ISSUE" \
+            --body "The changelog agent is not configured: the \`GEMINI_API_KEY\` secret is missing. A human needs to handle this one." >/dev/null
+
+      - name: Run the changelog agent
+        if: ${{ secrets.GEMINI_API_KEY != '' }}
+        run: .github/scripts/add-crate.sh
