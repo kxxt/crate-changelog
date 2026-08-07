@@ -150,10 +150,13 @@ or_models() {
     if [[ -n "${OPENROUTER_MODEL:-}" ]]; then
         printf '%s\n' "$OPENROUTER_MODEL"
     fi
+    # gpt-oss first: the nemotron free models ramble or truncate
+    # before emitting JSON, and the chain only advances on errors, so
+    # the ordering prefers models that follow the JSON instruction.
     printf '%s\n' \
-        "nvidia/nemotron-3-ultra-550b-a55b:free" \
         "openai/gpt-oss-20b:free" \
         "google/gemma-4-31b-it:free" \
+        "nvidia/nemotron-3-ultra-550b-a55b:free" \
         "nvidia/nemotron-3-super-120b-a12b:free" \
         "google/gemma-4-26b-a4b-it:free" \
         "nvidia/nemotron-nano-12b-v2-vl:free" \
@@ -167,7 +170,7 @@ import json, sys
 print(json.dumps({
     "model": sys.argv[1],
     "messages": [{"role": "user", "content": sys.argv[2]}],
-    "max_tokens": 1000,
+    "max_tokens": 4096,
     "temperature": 0.2,
 }))' "$1" "$2"
 }
@@ -201,15 +204,44 @@ PYEOF
 llm_url() {
     python3 - "$1" <<'PYEOF'
 import json, re, sys
+
+
+def message_text(msg):
+    """Collect text from an OpenAI-style message: string or list-of-part
+    content, plus any reasoning fields some models use."""
+    if not isinstance(msg, dict):
+        return None
+    out = []
+
+    def add(part):
+        if isinstance(part, str) and part:
+            out.append(part)
+        elif isinstance(part, dict):
+            t = part.get("text")
+            if isinstance(t, str) and t:
+                out.append(t)
+
+    content = msg.get("content")
+    if isinstance(content, list):
+        for part in content:
+            add(part)
+    else:
+        add(content)
+    for key in ("reasoning_content", "reasoning"):
+        add(msg.get(key))
+    return "\n".join(out) if out else None
+
+
 text = sys.argv[1].strip()
 try:
     data = json.loads(text)
     if isinstance(data, dict) and "choices" in data:
-        content = data["choices"][0].get("message", {}).get("content")
-        if isinstance(content, str) and content:
-            text = content
+        inner = message_text((data["choices"][0] or {}).get("message"))
+        if inner:
+            text = inner
 except Exception:
     pass
+# Strip markdown code fences if the model wrapped its JSON anyway.
 text = re.sub(r"```(?:json)?\s*", "", text)
 text = re.sub(r"\s*```", "", text).strip()
 url = ""
@@ -225,6 +257,10 @@ if not url:
     m = re.search(r'"changelog_url"\s*:\s*"([^"]+)"', text)
     if m:
         url = m.group(1)
+# No prose URL fallback: a model that cannot produce parseable JSON
+# with a changelog_url is skipped in favor of the next model. A
+# guessed URL (e.g. the repository homepage) would silently ship a
+# wrong changelog, which is worse than needs-human-help.
 print(url)
 PYEOF
 }
@@ -286,8 +322,11 @@ EOF
             printf '%s' "$url"
             return 0
         fi
-        info "model ${model} returned no usable URL"
-        return 0
+        snippet="$(printf '%s' "$resp" | head -c 300 | tr '\n' ' ')"
+        info "model ${model} returned no usable URL: ${snippet}"
+        # Keep trying the next model; only give up once all of them
+        # failed to produce a URL.
+        continue
     done
 
     if [[ -n "$rate_limited" ]]; then
