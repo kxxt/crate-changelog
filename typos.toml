@@ -1,0 +1,13 @@
+# Configuration for the `typos` spell checker (https://github.com/crate-ci/typos).
+#
+# The project deals in crate names and author handles that are not
+# dictionary words; extend the word list so the check stays green.
+
+[default]
+extend-words = {
+    "acexec" = "acexec",   # shard directory of the `tracexec` crate
+    "kxxt" = "kxxt",       # author handle (domain: crate-changelog.kxxt.dev)
+    "palc" = "palc",       # CLI parsing crate
+    "ratatui" = "ratatui", # crate name (typos suggests "ratatouille")
+    "tracexec" = "tracexec", # crate name
+}

@@ -1,5 +1,7 @@
 # crate-changelog
 
+[![CI](https://github.com/kxxt/crate-changelog/actions/workflows/ci.yml/badge.svg)](https://github.com/kxxt/crate-changelog/actions/workflows/ci.yml)
+
 A static site generator, written in Rust, that powers
 [crate-changelog.kxxt.dev](https://crate-changelog.kxxt.dev): every
 `/<crate>` path redirects to that crate's changelog.
@@ -62,6 +64,16 @@ reported with [indicatif](https://crates.io/crates/indicatif).
 $ cargo test
 $ cargo clippy --all-targets
 ```
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push
+and pull request and covers:
+
+- `cargo fmt --all --check` (formatting),
+- `cargo clippy --all-targets -- -D warnings`,
+- `crate-ci/typos` against [`typos.toml`](typos.toml),
+- `cargo test --all-targets`.
 
 ## Deployment
 
