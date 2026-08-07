@@ -22,8 +22,10 @@ jobs:
       issues: write
     env:
       # GitHub does not inject GITHUB_TOKEN into step environments; gh
-      # needs it explicitly.
+      # needs it explicitly. GH_REPO tells gh which repository to use,
+      # since this job does not run actions/checkout.
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     outputs:
       crate: ${{ steps.parse.outputs.crate }}
       suggested_url: ${{ steps.parse.outputs.suggested_url }}
@@ -128,8 +130,10 @@ jobs:
       pull-requests: write
     env:
       # gh prefers GH_TOKEN; the agent script additionally uses
-      # GITHUB_TOKEN to authenticate the git push.
+      # GITHUB_TOKEN to authenticate the git push. GH_REPO pins the
+      # default repository for gh even without a checkout.
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       GITHUB_TOKEN: ${{ github.token }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       LLM_MODEL: ${{ vars.LLM_MODEL || 'gemini-2.5-flash' }}
