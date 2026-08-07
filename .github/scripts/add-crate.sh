@@ -18,7 +18,7 @@
 #   GEMINI_API_KEY      free Google AI Studio API key
 #   LLM_MODEL           preferred Gemini model id (optional; defaults
 #                       are tried in order when unset or unavailable)
-#   MAX_ATTEMPTS        search attempts before giving up (default: 3)
+#   MAX_ATTEMPTS        search attempts before giving up (default: 20)
 #
 # Exit code is 0 even when the agent gives up; the issue labels carry
 # the outcome.
@@ -31,7 +31,7 @@ set -euo pipefail
 : "${CRATE:?CRATE is required}"
 : "${GEMINI_API_KEY:?GEMINI_API_KEY is required}"
 
-MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-20}"
 API_BASE="https://generativelanguage.googleapis.com/v1beta/models"
 
 comment() { gh issue comment "$ISSUE" --body "$1" >/dev/null; }
