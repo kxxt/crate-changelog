@@ -160,7 +160,7 @@ pub fn build(cli: &Cli) -> Result<()> {
         "_redirects",
         render::netlify_redirects(&crates),
     ));
-    render_bar.finish_with_message(format!("{} pages", files.len()));
+    render_bar.finish_with_message("done");
     progress.line(&format!("rendered {} pages", files.len()));
 
     // 4. Write everything to disk.

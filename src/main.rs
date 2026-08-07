@@ -25,7 +25,9 @@ fn main() -> Result<()> {
     if cli.verbose {
         spdlog::default_logger().set_level_filter(LevelFilter::All);
     }
-    let _ = spdlog::init_env_level();
+    if let Err(err) = spdlog::init_env_level() {
+        warn!("ignoring invalid SPDLOG_RS_LEVEL: {err}");
+    }
 
     if cli.version {
         println!("crate-changelog {}", env!("CARGO_PKG_VERSION"));
