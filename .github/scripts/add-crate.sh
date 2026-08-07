@@ -49,6 +49,13 @@ comment() { gh issue comment "$ISSUE" --body "$1" >/dev/null; }
 label() { gh issue edit "$ISSUE" --add-label "$1" >/dev/null || true; }
 info() { printf '\033[36m[agent]\033[0m %s\n' "$*" >&2; }
 
+# Scratch files carry large payloads into python: a single argv or
+# environment string is capped at 128 KB on Linux, but crates.io
+# responses (full version history) routinely exceed that. Each helper
+# cleans up its own file with a subshell-local EXIT trap (the helpers
+# run inside $() command substitutions, so the trap fires when that
+# subshell exits, even on set -e aborts).
+
 # ---------------------------------------------------------------------------
 # Free search harness
 # ---------------------------------------------------------------------------
@@ -60,10 +67,13 @@ ddg_search() {
     encoded="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$query")"
     page="$(curl -s --max-time 25 -A "$UA" "${DDG_URL}?q=${encoded}" 2>/dev/null || true)"
     [[ -n "$page" ]] || return 1
-    python3 - "$max" "$page" <<'PYEOF'
+    _tmp_payload="$(mktemp)"
+    trap 'rm -f "$_tmp_payload"' EXIT
+    printf '%s' "$page" >"$_tmp_payload"
+    python3 - "$max" "$_tmp_payload" <<'PYEOF'
 import html, re, sys, urllib.parse
 max_results = int(sys.argv[1])
-t = sys.argv[2]
+t = open(sys.argv[2], encoding="utf-8", errors="replace").read()
 links = re.findall(r'<a rel="nofollow" class="result__a" href="([^"]+)">(.*?)</a>', t, re.S)
 snips = re.findall(r'<a class="result__snippet"[^>]*>(.*?)</a>', t, re.S)
 for i, (href, title) in enumerate(links[:max_results]):
@@ -84,10 +94,17 @@ crates_meta() {
     json="$(curl -s --max-time 25 -A "crate-changelog-bot (crate-changelog CI)" \
         "https://crates.io/api/v1/crates/$crate" 2>/dev/null || true)"
     [[ -n "$json" ]] || return 1
-    python3 - "$json" <<'PYEOF'
+    # crates.io responses include the full version history and easily
+    # exceed the 128 KB per-argument limit; the temp file carries it.
+    # Global, not local: the EXIT trap below fires when this $()
+    # subshell exits, after the function's locals are gone.
+    _tmp_payload="$(mktemp)"
+    trap 'rm -f "$_tmp_payload"' EXIT
+    printf '%s' "$json" >"$_tmp_payload"
+    python3 - "$_tmp_payload" <<'PYEOF'
 import json, sys
 try:
-    crate = json.loads(sys.argv[1]).get("crate", {})
+    crate = json.load(open(sys.argv[1])).get("crate", {})
 except Exception:
     crate = {}
 for key in ("repository", "homepage", "documentation"):
