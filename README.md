@@ -145,9 +145,10 @@ it in the repository settings:
 When a model is rate-limited (`429`) or unavailable, the agent
 automatically falls back to the next model in its list
 (`gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-3.6-flash`,
-`gemini-2.0-flash`, `gemini-2.0-flash-lite`), so a single throttled
-model does not stall the workflow. If `GEMINI_API_KEY` is missing, the
-issue is labelled `needs-human-help` instead of failing.
+`gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-2.0-flash`,
+`gemini-2.0-flash-lite`), so a single throttled model does not stall
+the workflow. If `GEMINI_API_KEY` is missing, the issue is labelled
+`needs-human-help` instead of failing.
 
 ## License
 
