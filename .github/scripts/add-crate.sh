@@ -353,7 +353,7 @@ open_pr() {
     fi
 
     branch="changelog/$CRATE"
-    if gh pr view "$branch" --json number -q .number >/dev/null 2>&1; then
+    if gh pr view "$branch" >/dev/null 2>&1; then
         info "PR for branch $branch already exists; nothing to do"
         return 0
     fi
@@ -369,7 +369,9 @@ open_pr() {
     git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
         "HEAD:refs/heads/$branch" -q
 
-    pr_number="$(gh pr create \
+    # Older gh versions do not support --json on `pr create`; the PR
+    # URL it prints is enough to recover the number.
+    pr_url="$(gh pr create \
         --title "Add changelog redirect for $CRATE" \
         --body "Adds the changelog redirect for **$CRATE**.
 
@@ -377,9 +379,9 @@ Changelog URL: $url
 
 Closes #$ISSUE" \
         --label changelog-pr \
-        --head "$branch" \
-        --json number -q .number)"
-    info "opened PR #$pr_number"
+        --head "$branch")"
+    pr_number="$(printf '%s' "$pr_url" | sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p')"
+    info "opened PR #${pr_number:-?}"
 }
 
 # ---------------------------------------------------------------------------
