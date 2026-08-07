@@ -19,6 +19,9 @@
 #   LLM_MODEL           preferred Gemini model id (optional; defaults
 #                       are tried in order when unset or unavailable)
 #   MAX_ATTEMPTS        search attempts before giving up (default: 20)
+#   RATE_LIMIT_BACKOFF_SECS
+#                       sleep after every candidate is rate-limited
+#                       (default: 10)
 #
 # Exit code is 0 even when the agent gives up; the issue labels carry
 # the outcome.
@@ -68,7 +71,14 @@ llm_candidates() {
     if [[ -n "${LLM_MODEL:-}" ]]; then
         printf '%s\n' "$LLM_MODEL"
     fi
-    printf '%s\n' "gemini-2.5-flash" "gemini-3.6-flash" "gemini-2.0-flash"
+    # Free-tier flash models with independent rate-limit buckets, so a
+    # throttled model is skipped in favor of the next one.
+    printf '%s\n' \
+        "gemini-2.5-flash" \
+        "gemini-2.5-flash-lite" \
+        "gemini-3.6-flash" \
+        "gemini-2.0-flash" \
+        "gemini-2.0-flash-lite"
 }
 
 # Build the JSON request body from the prompt. No responseMimeType here:
@@ -84,13 +94,17 @@ print(json.dumps({
 }))' "$1"
 }
 
-# Extract the model's error message, if the response is an error envelope.
+# Extract the model's error message, prefixed by its HTTP code, if the
+# response is an error envelope. Prints e.g. "429 Quota exceeded ...".
 llm_error() {
     python3 - "$1" <<'PYEOF'
 import json, sys
 try:
     err = json.loads(sys.argv[1]).get("error")
-    print(err.get("message", "") if isinstance(err, dict) else "")
+    if isinstance(err, dict):
+        print(f"{err.get('code', '')} {err.get('message', '')}".strip())
+    else:
+        print("")
 except Exception:
     print("")
 PYEOF
@@ -135,9 +149,11 @@ PYEOF
 # Ask the model (with Google Search grounding) for a changelog URL.
 # Prints the URL, or nothing if the model found none / every model
 # failed. Falls back across llm_candidates() when a model is
-# unavailable, and logs API errors so failures are visible.
+# rate-limited or unavailable, and logs API errors so failures are
+# visible. When every candidate is throttled, sleeps briefly so the
+# next attempt has a chance.
 llm_find_url() {
-    local crate="$1" feedback="${2:-}" prompt model resp error_msg url
+    local crate="$1" feedback="${2:-}" prompt model resp error_msg err_lower url rate_limited=""
     prompt="$(cat <<EOF
 You maintain crate-changelog, a service that redirects
 https://crate-changelog.kxxt.dev/<crate> to that crate's changelog page.
@@ -172,12 +188,24 @@ EOF
 
         error_msg="$(llm_error "$resp")"
         if [[ -n "$error_msg" ]]; then
-            info "api error with ${model}: ${error_msg}"
-            # Model availability issues should fall through to the next
-            # candidate; anything else will not be fixed by retrying.
-            case "$error_msg" in
-                *"not found"* | *NOT_FOUND* | *"permission"* | *PERMISSION_DENIED* | *"deprecated"* | *DEPRECATED* | *"does not exist"* | *"access"*) continue ;;
-                *) return 0 ;;
+            err_lower="${error_msg,,}"
+            case "$err_lower" in
+                # Rate limits: try the next model instead of failing.
+                *"429"* | *rate\ limit* | *quota* | *too\ many\ requests* | *exhausted* | *slow\ down*)
+                    rate_limited="1"
+                    info "rate limit on ${model}: ${error_msg}"
+                    continue
+                    ;;
+                # Model availability issues fall through as well.
+                *not\ found* | *not_found* | *permission* | *deprecated* | *does\ not\ exist* | *access*)
+                    info "api error with ${model}: ${error_msg}"
+                    continue
+                    ;;
+                # Anything else will not be fixed by another model.
+                *)
+                    info "api error with ${model}: ${error_msg}"
+                    return 0
+                    ;;
             esac
         fi
 
@@ -189,6 +217,11 @@ EOF
         info "model ${model} returned no usable URL"
         return 0
     done
+
+    if [[ -n "$rate_limited" ]]; then
+        info "all models rate limited; backing off ${RATE_LIMIT_BACKOFF_SECS:-10}s"
+        sleep "${RATE_LIMIT_BACKOFF_SECS:-10}"
+    fi
     return 0
 }
 

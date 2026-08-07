@@ -123,7 +123,7 @@ automatically by [`.github/workflows/add-crate.yml`](.github/workflows/add-crate
    [`.github/scripts/add-crate.sh`](.github/scripts/add-crate.sh) asks a
    free-tier LLM *with web search* to find the best changelog URL for
    the crate. Candidates are validated with HTTP HEAD requests and the
-   search is retried with feedback up to three times.
+   search is retried with feedback (up to `MAX_ATTEMPTS` times).
 3. **PR or human help** — a found URL becomes a pull request that adds
    the `changelog` data file and closes the issue (`Closes #N`); if
    nothing usable is found the issue is labelled `needs-human-help`.
@@ -135,15 +135,19 @@ native web search (alternatives surveyed: Groq/Cerebras are free but
 have no search tool; OpenAI/Anthropic have no free API tier). Configure
 it in the repository settings:
 
-| Secret / variable         | Value                                                        |
-| ------------------------- | ------------------------------------------------------------ |
-| `GEMINI_API_KEY` (secret) | free key from <https://aistudio.google.com/apikey>           |
-| `LLM_MODEL` (variable)    | preferred model id, defaults to `gemini-2.5-flash` with
-  fallbacks to newer flash models when unavailable                |
+| Secret / variable              | Value                                                       |
+| ------------------------------ | ----------------------------------------------------------- |
+| `GEMINI_API_KEY` (secret)      | free key from <https://aistudio.google.com/apikey>          |
+| `LLM_MODEL` (variable)         | preferred model id, defaults to `gemini-2.5-flash`          |
+| `MAX_ATTEMPTS` (variable)      | search attempts before giving up (default: 20)              |
+| `RATE_LIMIT_BACKOFF_SECS` (variable) | sleep after every model is rate-limited (default: 10) |
 
-An issue run costs only a few requests, well below the free-tier
-limits. If `GEMINI_API_KEY` is missing, the issue is labelled
-`needs-human-help` instead of failing.
+When a model is rate-limited (`429`) or unavailable, the agent
+automatically falls back to the next model in its list
+(`gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-3.6-flash`,
+`gemini-2.0-flash`, `gemini-2.0-flash-lite`), so a single throttled
+model does not stall the workflow. If `GEMINI_API_KEY` is missing, the
+issue is labelled `needs-human-help` instead of failing.
 
 ## License
 
