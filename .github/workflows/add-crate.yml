@@ -20,10 +20,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       issues: write
+    env:
+      # GitHub does not inject GITHUB_TOKEN into step environments; gh
+      # needs it explicitly.
+      GH_TOKEN: ${{ github.token }}
     outputs:
       crate: ${{ steps.parse.outputs.crate }}
       suggested_url: ${{ steps.parse.outputs.suggested_url }}
-      exists: ${{ steps.check.outputs.exists }}
+      exists: ${{ steps.check.outputs.status == 'exists' }}
     steps:
       - name: Parse issue fields
         id: parse
@@ -54,8 +58,14 @@ jobs:
         env:
           CRATE: ${{ steps.parse.outputs.crate }}
         run: |
+          # Distinguish the failure modes so the follow-up step can
+          # comment accurately: missing-field | invalid-name | not-found | exists.
           if [[ -z "$CRATE" ]]; then
-            echo "exists=false" >>"$GITHUB_OUTPUT"
+            echo "status=missing-field" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$CRATE" =~ ^[a-zA-Z0-9_-]{1,64}$ ]]; then
+            echo "status=invalid-name" >>"$GITHUB_OUTPUT"
             exit 0
           fi
           code=000
@@ -66,30 +76,40 @@ jobs:
             sleep 2
           done
           if [[ "$code" == "200" ]]; then
-            echo "exists=true" >>"$GITHUB_OUTPUT"
+            echo "status=exists" >>"$GITHUB_OUTPUT"
           else
-            echo "exists=false" >>"$GITHUB_OUTPUT"
+            echo "status=not-found" >>"$GITHUB_OUTPUT"
           fi
 
-      - name: Comment and close if the crate does not exist
-        if: steps.check.outputs.exists == 'false'
+      - name: Comment and close if the crate is unusable
+        if: steps.check.outputs.status != 'exists'
         env:
           CRATE: ${{ steps.parse.outputs.crate }}
           ISSUE: ${{ github.event.issue.number }}
+          STATUS: ${{ steps.check.outputs.status }}
         run: |
-          if [[ -z "$CRATE" ]]; then
-            gh issue comment "$ISSUE" \
-              --body "I could not find a crate name in this issue. Please open a new issue using the **Changelog redirect request** template." >/dev/null
-            gh issue edit "$ISSUE" --add-label needs-human-help >/dev/null
-          else
-            gh issue comment "$ISSUE" \
-              --body "The crate **\`$CRATE\`** does not exist on [crates.io](https://crates.io/crates/$CRATE), so there is nothing to redirect. Closing." >/dev/null
-            gh issue edit "$ISSUE" --add-label crate-not-found >/dev/null
-            gh issue close "$ISSUE" --reason "not planned" >/dev/null
-          fi
+          case "$STATUS" in
+            missing-field)
+              gh issue comment "$ISSUE" \
+                --body "I could not find a crate name in this issue. Please open a new issue using the **Changelog redirect request** template." >/dev/null
+              gh issue edit "$ISSUE" --add-label needs-human-help >/dev/null
+              ;;
+            invalid-name)
+              gh issue comment "$ISSUE" \
+                --body "**\`$CRATE\`** is not a valid crates.io name (1-64 chars of \`[a-zA-Z0-9_-]\`), so there is nothing to redirect. Closing." >/dev/null
+              gh issue edit "$ISSUE" --add-label crate-not-found >/dev/null
+              gh issue close "$ISSUE" --reason "not planned" >/dev/null
+              ;;
+            *)
+              gh issue comment "$ISSUE" \
+                --body "The crate **\`$CRATE\`** does not exist on [crates.io](https://crates.io/crates/$CRATE), so there is nothing to redirect. Closing." >/dev/null
+              gh issue edit "$ISSUE" --add-label crate-not-found >/dev/null
+              gh issue close "$ISSUE" --reason "not planned" >/dev/null
+              ;;
+          esac
 
       - name: Hand the issue to the agent
-        if: steps.check.outputs.exists == 'true'
+        if: steps.check.outputs.status == 'exists'
         env:
           ISSUE: ${{ github.event.issue.number }}
         run: gh issue edit "$ISSUE" --add-label agent-ready >/dev/null
@@ -107,7 +127,10 @@ jobs:
       issues: write
       pull-requests: write
     env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # gh prefers GH_TOKEN; the agent script additionally uses
+      # GITHUB_TOKEN to authenticate the git push.
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       LLM_MODEL: ${{ vars.LLM_MODEL || 'gemini-2.5-flash' }}
       CRATE: ${{ needs.validate.outputs.crate }}
