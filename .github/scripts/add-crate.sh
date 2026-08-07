@@ -342,8 +342,10 @@ resolve_url() {
 
 # Add the data file and open a PR that closes the issue.
 open_pr() {
-    local url="$1" path branch pr_number
+    local url="$1" path branch remote pr_url pr_number existing
     path="$(shard_path "$CRATE")"
+    branch="changelog/$CRATE"
+    remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
     if [[ -f "$path" ]]; then
         comment "**$CRATE** is already tracked (see \`$path\`). Closing."
@@ -352,10 +354,20 @@ open_pr() {
         return 0
     fi
 
-    branch="changelog/$CRATE"
+    # An open PR for this branch means the work is already in flight.
     if gh pr view "$branch" >/dev/null 2>&1; then
         info "PR for branch $branch already exists; nothing to do"
         return 0
+    fi
+
+    # A PR in another state (closed/merged) means a human already
+    # looked at this branch; do not override their decision.
+    existing="$(gh pr list --head "$branch" --state all 2>/dev/null || true)"
+    if [[ -n "$existing" ]]; then
+        comment "A previous pull request exists for the branch \`$branch\` in a closed state, so I left it alone. A human should decide whether to reopen or recreate it."
+        label needs-human-help
+        info "previous closed/merged PR exists for $branch; not touching it"
+        return 1
     fi
 
     mkdir -p "$(dirname "$path")"
@@ -366,8 +378,15 @@ open_pr() {
     git switch -c "$branch"
     git add "$path"
     git commit -m "Add changelog redirect for $CRATE" -q
-    git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-        "HEAD:refs/heads/$branch" -q
+
+    # A stale branch from a previous failed run (the push landed but
+    # `pr create` did not) must be overwritten rather than rejected.
+    if git ls-remote --exit-code "$remote" "refs/heads/$branch" >/dev/null 2>&1; then
+        info "branch $branch already exists remotely; force-pushing the updated data"
+        git push --force "$remote" "HEAD:refs/heads/$branch" -q
+    else
+        git push "$remote" "HEAD:refs/heads/$branch" -q
+    fi
 
     # Older gh versions do not support --json on `pr create`; the PR
     # URL it prints is enough to recover the number.
@@ -404,8 +423,11 @@ if [[ -f "$tracked_path" ]]; then
 fi
 
 if url="$(resolve_url "$CRATE" "$SUGGESTED_URL")"; then
-    open_pr "$url"
-    label agent-done
+    # open_pr returns 1 when it deferred to a human (closed PR case);
+    # in that situation the agent-done label must not be applied.
+    if open_pr "$url"; then
+        label agent-done
+    fi
 else
     label needs-human-help
     comment "I could not find a changelog URL for **$CRATE** after $MAX_ATTEMPTS search attempts. A human should take a look (check \`$CRATE\` on [crates.io](https://crates.io/crates/$CRATE))."
