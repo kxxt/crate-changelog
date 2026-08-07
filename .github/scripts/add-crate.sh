@@ -31,7 +31,7 @@ set -euo pipefail
 : "${GEMINI_API_KEY:?GEMINI_API_KEY is required}"
 
 MODEL="${LLM_MODEL:-gemini-2.5-flash}"
-MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-20}"
 API_BASE="https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent"
 
 comment() { gh issue comment "$ISSUE" --body "$1" >/dev/null; }
