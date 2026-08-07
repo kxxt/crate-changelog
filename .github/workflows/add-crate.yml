@@ -117,15 +117,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Label for humans if the API key is missing
-        if: ${{ secrets.GEMINI_API_KEY == '' }}
-        env:
-          ISSUE: ${{ github.event.issue.number }}
-        run: |
-          gh issue edit "$ISSUE" --add-label needs-human-help >/dev/null
-          gh issue comment "$ISSUE" \
-            --body "The changelog agent is not configured: the \`GEMINI_API_KEY\` secret is missing. A human needs to handle this one." >/dev/null
-
       - name: Run the changelog agent
-        if: ${{ secrets.GEMINI_API_KEY != '' }}
-        run: .github/scripts/add-crate.sh
+        run: |
+          if [[ -z "${GEMINI_API_KEY}" ]]; then
+            # The secret is not configured; label the issue for humans
+            # instead of failing the workflow.
+            gh issue edit "$ISSUE" --add-label needs-human-help >/dev/null
+            gh issue comment "$ISSUE" \
+              --body "The changelog agent is not configured: the \`GEMINI_API_KEY\` secret is missing. A human needs to handle this one." >/dev/null
+            exit 0
+          fi
+          .github/scripts/add-crate.sh
