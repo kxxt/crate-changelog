@@ -38,7 +38,7 @@ set -euo pipefail
 : "${CRATE:?CRATE is required}"
 : "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
 
-MAX_ATTEMPTS="${MAX_ATTEMPTS:-20}"
+MAX_ATTEMPTS="${MAX_ATTEMPTS:-5}"
 RATE_LIMIT_BACKOFF_SECS="${RATE_LIMIT_BACKOFF_SECS:-10}"
 OPENROUTER_API="https://openrouter.ai/api/v1/chat/completions"
 DDG_URL="https://html.duckduckgo.com/html/"
